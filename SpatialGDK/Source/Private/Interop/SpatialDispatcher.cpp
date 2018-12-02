@@ -111,4 +111,8 @@ void USpatialDispatcher::ProcessOps(Worker_OpList* OpList)
 			Channel->SpatialViewTick();
 		}
 	}
+
+	FOpList* fopl = new FOpList();
+	fopl->ops = OpList;
+	ProcessedOps.Broadcast(*fopl);
 }

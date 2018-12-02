@@ -20,6 +20,17 @@ class USpatialNetDriver;
 class USpatialReceiver;
 class USpatialStaticComponentView;
 
+struct Worker_OpList;
+
+USTRUCT()
+struct FOpList {
+	GENERATED_BODY()
+
+	Worker_OpList* ops;
+};
+
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FProcessedOps, struct FOpList&, OpList);
+
 UCLASS()
 class SPATIALGDK_API USpatialDispatcher : public UObject
 {
@@ -28,6 +39,8 @@ class SPATIALGDK_API USpatialDispatcher : public UObject
 public:
 	void Init(USpatialNetDriver* NetDriver);
 	void ProcessOps(Worker_OpList* OpList);
+
+	FProcessedOps ProcessedOps;
 
 private:
 	UPROPERTY()
