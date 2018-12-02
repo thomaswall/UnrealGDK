@@ -29,7 +29,7 @@ struct FOpList {
 	Worker_OpList* ops;
 };
 
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FProcessedOps, struct FOpList&, OpList);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FProcessedOps, struct FOpList, OpList);
 
 UCLASS()
 class SPATIALGDK_API USpatialDispatcher : public UObject

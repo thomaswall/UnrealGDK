@@ -112,7 +112,7 @@ void USpatialDispatcher::ProcessOps(Worker_OpList* OpList)
 		}
 	}
 
-	FOpList* fopl = new FOpList();
-	fopl->ops = OpList;
-	ProcessedOps.Broadcast(*fopl);
+	FOpList fopl;
+	fopl.ops = OpList;
+	ProcessedOps.Broadcast(fopl);
 }
