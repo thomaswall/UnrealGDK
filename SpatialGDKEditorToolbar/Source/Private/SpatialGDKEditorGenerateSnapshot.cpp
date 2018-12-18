@@ -3,8 +3,8 @@
 #include "SpatialGDKEditorGenerateSnapshot.h"
 
 #include "Engine/LevelScriptActor.h"
-#include "Schema/Rotation.h"
 #include "Schema/StandardLibrary.h"
+#include "Schema/SpawnData.h"
 #include "Schema/UnrealMetadata.h"
 #include "SpatialActorChannel.h"
 #include "SpatialConstants.h"
@@ -71,26 +71,6 @@ bool CreateSpawnerEntity(Worker_SnapshotOutputStream* OutputStream)
 Worker_ComponentData CreateGlobalStateManagerData()
 {
 	StringToEntityMap SingletonNameToEntityId;
-	StringToEntityMap StablyNamedPathToEntityId;
-
-	for (TObjectIterator<UClass> It; It; ++It)
-	{
-		// Find all singleton classes
-		if (!It->HasAnySpatialClassFlags(SPATIALCLASS_Singleton))
-		{
-			continue;
-		}
-
-		// Ensure we don't process skeleton or reinitialized classes
-		if (It->GetName().StartsWith(TEXT("SKEL_"), ESearchCase::CaseSensitive) || It->GetName().StartsWith(TEXT("REINST_"), ESearchCase::CaseSensitive))
-		{
-			continue;
-		}
-
-		// Id is initially 0 to indicate that this Singleton entity has not been created yet.
-		// When the worker authoritative over the GSM sees 0, it knows it is safe to create it.
-		SingletonNameToEntityId.Add(*It->GetPathName(), 0);
-	}
 
 	Worker_ComponentData Data;
 	Data.component_id = SpatialConstants::SINGLETON_MANAGER_COMPONENT_ID;
@@ -98,7 +78,6 @@ Worker_ComponentData CreateGlobalStateManagerData()
 	Schema_Object* ComponentObject = Schema_GetComponentDataFields(Data.schema_type);
 
 	AddStringToEntityMapToSchema(ComponentObject, 1, SingletonNameToEntityId);
-	AddStringToEntityMapToSchema(ComponentObject, 2, StablyNamedPathToEntityId);
 
 	return Data;
 }
@@ -302,7 +281,7 @@ bool CreateStartupActor(Worker_SnapshotOutputStream* OutputStream, AActor* Actor
 	WriteAclMap ComponentWriteAcl;
 
 	ComponentWriteAcl.Add(SpatialConstants::POSITION_COMPONENT_ID, UnrealServerPermission);
-	ComponentWriteAcl.Add(SpatialConstants::ROTATION_COMPONENT_ID, UnrealServerPermission);
+	ComponentWriteAcl.Add(SpatialConstants::SPAWN_DATA_COMPONENT_ID, UnrealServerPermission);
 	ComponentWriteAcl.Add(SpatialConstants::ENTITY_ACL_COMPONENT_ID, UnrealServerPermission);
 
 	ForAllSchemaComponentTypes([&](ESchemaComponentType Type)
@@ -363,7 +342,7 @@ bool CreateStartupActor(Worker_SnapshotOutputStream* OutputStream, AActor* Actor
 	Components.Add(improbable::Metadata(ActorClass->GetName()).CreateMetadataData());
 	Components.Add(improbable::EntityAcl(AnyWorkerPermission, ComponentWriteAcl).CreateEntityAclData());
 	Components.Add(improbable::Persistence().CreatePersistenceData());
-	Components.Add(improbable::Rotation(Actor->GetActorRotation()).CreateRotationData());
+	Components.Add(improbable::SpawnData(Actor).CreateSpawnDataData());
 	Components.Add(improbable::UnrealMetadata(StaticPath, {}, ActorClass->GetPathName()).CreateUnrealMetadataData());
 
 	Components.Append(CreateStartupActorData(Channel, Actor, TypebindingManager, Cast<USpatialNetDriver>(NetConnection->Driver)));
@@ -388,7 +367,7 @@ bool ProcessSupportedActors(const TSet<AActor*>& Actors, USpatialTypebindingMana
 			continue;
 		}
 
-		if (Actor->IsEditorOnly() || !TypebindingManager->IsSupportedClass(ActorClass) || !Actor->GetIsReplicated())
+		if (Actor->IsEditorOnly() || Actor->IsPendingKill() || !TypebindingManager->IsSupportedClass(ActorClass) || !Actor->GetIsReplicated())
 		{
 			continue;
 		}
@@ -463,22 +442,8 @@ bool ValidateAndCreateSnapshotGenerationPath(FString& SavePath)
 	return true;
 }
 
-bool SpatialGDKGenerateSnapshot(UWorld* World)
+bool FillSnapshot(Worker_SnapshotOutputStream* OutputStream, UWorld* World)
 {
-	const USpatialGDKEditorToolbarSettings* Settings = GetDefault<USpatialGDKEditorToolbarSettings>();
-	FString SavePath = FPaths::Combine(Settings->GetSpatialOSSnapshotPath(), Settings->GetSpatialOSSnapshotFile());
-	if (!ValidateAndCreateSnapshotGenerationPath(SavePath))
-	{
-		return false;
-	}
-
-	UE_LOG(LogSpatialGDKSnapshot, Display, TEXT("Saving snapshot to: %s"), *SavePath);
-
-	Worker_ComponentVtable DefaultVtable{};
-	Worker_SnapshotParameters Parameters{};
-	Parameters.default_component_vtable = &DefaultVtable;
-	Worker_SnapshotOutputStream* OutputStream = Worker_SnapshotOutputStream_Create(TCHAR_TO_UTF8(*SavePath), &Parameters);
-
 	if (!CreateSpawnerEntity(OutputStream))
 	{
 		UE_LOG(LogSpatialGDKSnapshot, Error, TEXT("Error generating Spawner in snapshot: %s"), UTF8_TO_TCHAR(Worker_SnapshotOutputStream_GetError(OutputStream)));
@@ -503,7 +468,37 @@ bool SpatialGDKGenerateSnapshot(UWorld* World)
 		return false;
 	}
 
+	return true;
+}
+
+bool SpatialGDKGenerateSnapshot(UWorld* World)
+{
+	const USpatialGDKEditorToolbarSettings* Settings = GetDefault<USpatialGDKEditorToolbarSettings>();
+	FString SavePath = FPaths::Combine(Settings->GetSpatialOSSnapshotPath(), Settings->GetSpatialOSSnapshotFile());
+	if (!ValidateAndCreateSnapshotGenerationPath(SavePath))
+	{
+		return false;
+	}
+
+	UE_LOG(LogSpatialGDKSnapshot, Display, TEXT("Saving snapshot to: %s"), *SavePath);
+
+	Worker_ComponentVtable DefaultVtable{};
+	Worker_SnapshotParameters Parameters{};
+	Parameters.default_component_vtable = &DefaultVtable;
+
+	bool bSuccess = true;
+	Worker_SnapshotOutputStream* OutputStream = Worker_SnapshotOutputStream_Create(TCHAR_TO_UTF8(*SavePath), &Parameters);
+	if (const char* SchemaError = Worker_SnapshotOutputStream_GetError(OutputStream))
+	{
+		UE_LOG(LogSpatialGDKSnapshot, Error, TEXT("Error creating SnapshotOutputStream: %s"), UTF8_TO_TCHAR(SchemaError));
+		bSuccess = false;
+	}
+	else
+	{
+		bSuccess = FillSnapshot(OutputStream, World);
+	}
+
 	Worker_SnapshotOutputStream_Destroy(OutputStream);
 
-	return true;
+	return bSuccess;
 }

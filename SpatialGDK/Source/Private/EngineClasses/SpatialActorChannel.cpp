@@ -64,7 +64,6 @@ USpatialActorChannel::USpatialActorChannel(const FObjectInitializer& ObjectIniti
 	, bFirstTick(true)
 	, NetDriver(nullptr)
 	, LastSpatialPosition(FVector::ZeroVector)
-	, LastSpatialRotation(FRotator::ZeroRotator)
 	, bCreatingNewEntity(false)
 {
 }
@@ -265,7 +264,6 @@ int64 USpatialActorChannel::ReplicateActor()
 	if (!bCreatingNewEntity && !PlayerController && !Cast<APlayerState>(Actor))
 	{
 		UpdateSpatialPosition();
-		UpdateSpatialRotation();
 	}
 	
 	// Update the replicated property change list.
@@ -727,25 +725,10 @@ void USpatialActorChannel::UpdateSpatialPosition()
 	}
 }
 
-void USpatialActorChannel::UpdateSpatialRotation()
-{
-	FRotator ActorSpatialRotation = Actor->GetActorRotation();
-
-	// Only update the Actor's rotation if it has rotated far enough
-	const float SpatialRotationThreshold = 0.1f;  // 0.1 radian (~5.7 degrees)
-	FQuat RotationDelta = (ActorSpatialRotation - LastSpatialRotation).Quaternion();
-	RotationDelta.Normalize();
-	if (RotationDelta.GetAngle() < SpatialRotationThreshold)
-	{
-		return;
-	}
-
-	LastSpatialRotation = ActorSpatialRotation;
-	Sender->SendRotationUpdate(EntityId, Actor->GetActorRotation());
-}
-
 FVector USpatialActorChannel::GetActorSpatialPosition(AActor* InActor)
 {
+	FVector Location = FVector::ZeroVector;
+
 	// If the Actor has an Owner, use its position.
 	// Otherwise if the Actor has a well defined location then use that
 	// Otherwise use the origin
@@ -753,14 +736,13 @@ FVector USpatialActorChannel::GetActorSpatialPosition(AActor* InActor)
 	{
 		return GetActorSpatialPosition(InActor->GetOwner());
 	}
-	else if (InActor->GetRootComponent())
+	else if (USceneComponent* RootComponent = InActor->GetRootComponent())
 	{
-		return InActor->GetRootComponent()->GetComponentLocation();
+		Location = RootComponent->GetComponentLocation();
 	}
-	else
-	{
-		return FVector::ZeroVector;
-	}
+
+	// Rebase location onto zero origin so actor is positioned correctly in SpatialOS.
+	return FRepMovement::RebaseOntoZeroOrigin(Location, InActor);
 }
 
 void USpatialActorChannel::SpatialViewTick()
